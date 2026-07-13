@@ -48,3 +48,56 @@ userSchema.methods.comparePassword = function (candidate: string) {
 };
 
 export const User = mongoose.model<IUser>("User", userSchema);
+
+
+/* ---------------- CAR ---------------- */
+
+export interface ICar extends Document {
+  title: string;
+  brand: string;
+  carModel: string;
+  year: number;
+  price: number;
+  condition: "New" | "Used";
+  fuelType: "Petrol" | "Diesel" | "CNG" | "Electric" | "Hybrid";
+  transmission: "Manual" | "Automatic";
+  mileage: number;
+  location: string;
+  shortDescription: string;
+  fullDescription: string;
+  images: string[];
+  seller: mongoose.Types.ObjectId;
+  status: "pending" | "approved" | "rejected";
+  rating: number;
+  createdAt: Date;
+}
+
+const carSchema = new Schema<ICar>(
+  {
+    title: { type: String, required: true, trim: true },
+    brand: { type: String, required: true },
+    carModel: { type: String, required: true },
+    year: { type: Number, required: true },
+    price: { type: Number, required: true },
+    condition: { type: String, enum: ["New", "Used"], default: "Used" },
+    fuelType: {
+      type: String,
+      enum: ["Petrol", "Diesel", "CNG", "Electric", "Hybrid"],
+      default: "Petrol",
+    },
+    transmission: { type: String, enum: ["Manual", "Automatic"], default: "Manual" },
+    mileage: { type: Number, default: 0 },
+    location: { type: String, required: true },
+    shortDescription: { type: String, required: true, maxlength: 200 },
+    fullDescription: { type: String, required: true },
+    images: { type: [String], default: [] },
+    seller: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    status: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },
+    rating: { type: Number, default: 0, min: 0, max: 5 },
+  },
+  { timestamps: true }
+);
+
+carSchema.index({ title: "text", brand: "text", carModel: "text", location: "text" });
+
+export const Car = mongoose.model<ICar>("Car", carSchema);
