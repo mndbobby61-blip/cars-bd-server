@@ -6,10 +6,12 @@ import mongoose from "mongoose";
 import asyncHandler from "express-async-handler";
 import { User } from "./models";
 import { generateToken } from "./auth";
+import { OAuth2Client } from "google-auth-library";
 
 dotenv.config();
 
 const app = express();
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 app.use(cors({ origin: process.env.CLIENT_URL || "http://localhost:3000", credentials: true }));
 app.use(express.json());
@@ -74,6 +76,53 @@ app.post(
 );
 
 const PORT = process.env.PORT || 5000;
+
+app.post(
+  "/api/auth/google",
+  asyncHandler(async (req: Request, res: Response) => {
+    const { credential } = req.body;
+
+    if (!credential) {
+      res.status(400);
+      throw new Error("Google credential is missing");
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+
+    if (!payload?.email) {
+      res.status(400);
+      throw new Error("Could not verify Google account");
+    }
+
+    let user = await User.findOne({ email: payload.email.toLowerCase() });
+
+    if (user && user.authProvider === "local") {
+      res.status(400);
+      throw new Error("This email is already registered with a password. Please log in normally.");
+    }
+
+    if (!user) {
+      user = await User.create({
+        name: payload.name || "Google User",
+        email: payload.email,
+        authProvider: "google",
+        googleId: payload.sub,
+      });
+    }
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token: generateToken(user._id.toString()),
+    });
+  })
+);
 
 mongoose
   .connect(process.env.MONGO_URI as string)
