@@ -1,103 +1,82 @@
-import mongoose, { Document, Schema } from "mongoose";
-import bcrypt from "bcryptjs";
+import { MongoClient, Db, ObjectId } from "mongodb";
+
+/* ---------------- Types ---------------- */
 
 export type UserRole = "user" | "admin";
-export type AuthProvider = "local" | "google";
 
-export interface IUser extends Document {
+export interface IUser {
+  _id?: ObjectId;
   name: string;
   email: string;
   password?: string;
   phone?: string;
   role: UserRole;
-  authProvider: AuthProvider;
   googleId?: string;
+  avatar?: string;
   createdAt: Date;
-  comparePassword(candidate: string): Promise<boolean>;
+  updatedAt: Date;
 }
 
-const userSchema = new Schema<IUser>(
-  {
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: {
-      type: String,
-      minlength: 6,
-      required: function (this: IUser) {
-        return this.authProvider === "local";
-      },
-    },
-    phone: { type: String, default: "" },
-    role: { type: String, enum: ["user", "admin"], default: "user" },
-    authProvider: { type: String, enum: ["local", "google"], default: "local" },
-    googleId: { type: String, default: undefined },
-  },
-  { timestamps: true }
-);
+export type CarCondition = "New" | "Used";
+export type FuelType = "Petrol" | "Diesel" | "CNG" | "Electric" | "Hybrid";
+export type Transmission = "Manual" | "Automatic";
+export type CarStatus = "pending" | "approved" | "rejected";
 
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
-});
-
-userSchema.methods.comparePassword = function (candidate: string) {
-  if (!this.password) return Promise.resolve(false);
-  return bcrypt.compare(candidate, this.password);
-};
-
-export const User = mongoose.model<IUser>("User", userSchema);
-
-
-/* ---------------- CAR ---------------- */
-
-export interface ICar extends Document {
+export interface ICar {
+  _id?: ObjectId;
   title: string;
   brand: string;
   carModel: string;
   year: number;
   price: number;
-  condition: "New" | "Used";
-  fuelType: "Petrol" | "Diesel" | "CNG" | "Electric" | "Hybrid";
-  transmission: "Manual" | "Automatic";
+  condition: CarCondition;
+  fuelType: FuelType;
+  transmission: Transmission;
   mileage: number;
   location: string;
   shortDescription: string;
   fullDescription: string;
   images: string[];
-  seller: mongoose.Types.ObjectId;
-  status: "pending" | "approved" | "rejected";
+  seller: ObjectId;
+  status: CarStatus;
   rating: number;
   createdAt: Date;
+  updatedAt: Date;
 }
 
-const carSchema = new Schema<ICar>(
-  {
-    title: { type: String, required: true, trim: true },
-    brand: { type: String, required: true },
-    carModel: { type: String, required: true },
-    year: { type: Number, required: true },
-    price: { type: Number, required: true },
-    condition: { type: String, enum: ["New", "Used"], default: "Used" },
-    fuelType: {
-      type: String,
-      enum: ["Petrol", "Diesel", "CNG", "Electric", "Hybrid"],
-      default: "Petrol",
-    },
-    transmission: { type: String, enum: ["Manual", "Automatic"], default: "Manual" },
-    mileage: { type: Number, default: 0 },
-    location: { type: String, required: true },
-    shortDescription: { type: String, required: true, maxlength: 200 },
-    fullDescription: { type: String, required: true },
-    images: { type: [String], default: [] },
-    seller: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    status: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },
-    rating: { type: Number, default: 0, min: 0, max: 5 },
-  },
-  { timestamps: true }
-);
+/* ---------------- DB Connection ---------------- */
 
-carSchema.index({ title: "text", brand: "text", carModel: "text", location: "text" });
+let client: MongoClient;
+let db: Db;
 
-export const Car = mongoose.model<ICar>("Car", carSchema);
+export async function connectDB(): Promise<Db> {
+  if (db) return db;
+  client = new MongoClient(process.env.MONGO_URI as string);
+  await client.connect();
+  db = client.db(); // uses database name from the connection string
+  console.log("MongoDB connected");
+
+  // Indexes
+  await db.collection<IUser>("users").createIndex({ email: 1 }, { unique: true });
+  await db.collection<ICar>("cars").createIndex({
+    title: "text",
+    brand: "text",
+    carModel: "text",
+    location: "text",
+  });
+
+  return db;
+}
+
+export function getDB(): Db {
+  if (!db) throw new Error("Database not connected yet");
+  return db;
+}
+
+export function usersCollection() {
+  return getDB().collection<IUser>("users");
+}
+
+export function carsCollection() {
+  return getDB().collection<ICar>("cars");
+}

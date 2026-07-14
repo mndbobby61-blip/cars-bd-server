@@ -1,42 +1,39 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { User, IUser } from "./models";
+import { ObjectId } from "mongodb";
+import { usersCollection, IUser } from "./models";
 
 export interface AuthRequest extends Request {
-  user?: IUser;
+  user?: IUser & { _id: ObjectId };
 }
 
-export const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export async function protect(req: AuthRequest, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Not authorized, no token" });
+  }
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "Not authorized, no token provided" });
-    }
-
-    const token = authHeader.split(" ")[1];
+    const token = header.split(" ")[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { id: string };
-
-    const user = await User.findById(decoded.id).select("-password");
-    if (!user) {
-      return res.status(401).json({ message: "Not authorized, user not found" });
-    }
-
-    req.user = user;
+    const user = await usersCollection().findOne(
+      { _id: new ObjectId(decoded.id) },
+      { projection: { password: 0 } }
+    );
+    if (!user) return res.status(401).json({ message: "User no longer exists" });
+    req.user = user as IUser & { _id: ObjectId };
     next();
-  } catch (error) {
-    return res.status(401).json({ message: "Not authorized, invalid or expired token" });
+  } catch (err) {
+    return res.status(401).json({ message: "Not authorized, token invalid" });
   }
-};
+}
 
-export const adminOnly = (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (req.user && req.user.role === "admin") {
-    return next();
+export function adminOnly(req: AuthRequest, res: Response, next: NextFunction) {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ message: "Admin access required" });
   }
-  return res.status(403).json({ message: "Access denied. Admins only." });
-};
+  next();
+}
 
-export const generateToken = (id: string) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET as string, {
-    expiresIn: (process.env.JWT_EXPIRES_IN || "7d") as any,
-  });
-};
+export function signToken(id: string) {
+  return jwt.sign({ id }, process.env.JWT_SECRET as string, { expiresIn: "7d" });
+}
