@@ -4,7 +4,7 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import { ObjectId } from "mongodb";
 import { OAuth2Client } from "google-auth-library";
-import { connectDB, usersCollection, carsCollection, IUser, ICar } from "./models";
+import { connectDB, usersCollection, carsCollection, bookingsCollection, reviewsCollection, IUser, ICar, IBooking, IReview } from "./models";
 import { protect, adminOnly, signToken, AuthRequest } from "./auth";
 
 const app = express();
@@ -31,6 +31,56 @@ function toAuthResponse(user: any) {
 }
 
 app.get("/api/health", (req: Request, res: Response) => res.json({ status: "ok" }));
+
+/* ================= REVIEW ROUTES ================= */
+
+app.post("/api/reviews", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { carId, rating, comment } = req.body;
+    if (!carId || !rating || !comment) {
+      return res.status(400).json({ message: "Car, rating, and comment are required" });
+    }
+    if (rating < 1 || rating > 5) {
+      return res.status(400).json({ message: "Rating must be between 1 and 5" });
+    }
+
+    const newReview: IReview = {
+      car: new ObjectId(carId),
+      user: req.user!._id,
+      userName: req.user!.name,
+      userEmail: req.user!.email,
+      rating: Number(rating),
+      comment,
+      createdAt: new Date(),
+    };
+
+    const result = await reviewsCollection().insertOne(newReview);
+
+    // Recalculate average rating for the car
+    const allReviews = await reviewsCollection().find({ car: newReview.car }).toArray();
+    const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+    await carsCollection().updateOne(
+      { _id: newReview.car },
+      { $set: { rating: Number(avgRating.toFixed(1)) } }
+    );
+
+    res.status(201).json({ ...newReview, _id: result.insertedId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/reviews/:carId", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const reviews = await reviewsCollection()
+      .find({ car: new ObjectId(req.params.carId) })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json(reviews);
+  } catch (err) {
+    next(err);
+  }
+});
 
 /* ================= AUTH ROUTES ================= */
 
@@ -303,6 +353,130 @@ app.delete("/api/cars/:id", protect, async (req: AuthRequest, res: Response, nex
   }
 });
 
+/* ================= FAVORITE ROUTES ================= */
+
+app.post("/api/favorites/:carId", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const carId = new ObjectId(req.params.carId);
+    const alreadyFav = (req.user!.favorites || []).some((f) => f.toString() === carId.toString());
+
+    await usersCollection().updateOne(
+      { _id: req.user!._id },
+      alreadyFav
+        ? { $pull: { favorites: carId } }
+        : { $addToSet: { favorites: carId } }
+    );
+
+    res.json({ favorited: !alreadyFav });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/favorites", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const favIds = req.user!.favorites || [];
+    const cars = await carsCollection().find({ _id: { $in: favIds } }).toArray();
+    res.json(cars);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ================= BOOKING ROUTES ================= */
+
+app.post("/api/bookings", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { carId, amount, moveInDate, contactNumber, notes } = req.body;
+    if (!carId || !amount || !moveInDate || !contactNumber) {
+      return res.status(400).json({ message: "Car, amount, move-in date, and contact number are required" });
+    }
+
+    const car = await carsCollection().findOne({ _id: new ObjectId(carId) });
+    if (!car) return res.status(404).json({ message: "Car not found" });
+
+    const now = new Date();
+    const newBooking: IBooking = {
+      car: car._id!,
+      buyer: req.user!._id,
+      seller: car.seller,
+      amount: Number(amount),
+      moveInDate,
+      contactNumber,
+      notes,
+      status: "pending",
+      paymentStatus: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const result = await bookingsCollection().insertOne(newBooking);
+    res.status(201).json({ ...newBooking, _id: result.insertedId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/bookings/mine", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const bookings = await bookingsCollection()
+      .find({ buyer: req.user!._id })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json(bookings);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/bookings/seller", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const bookings = await bookingsCollection()
+      .find({ seller: req.user!._id })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const enriched = await Promise.all(
+  bookings.map(async (b: IBooking) => {
+        const car = await carsCollection().findOne({ _id: b.car });
+        const buyer = await usersCollection().findOne(
+          { _id: b.buyer },
+          { projection: { name: 1, email: 1, phone: 1 } }
+        );
+        return { ...b, car, buyer };
+      })
+    );
+
+    res.json(enriched);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put("/api/bookings/:id/status", protect, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { status } = req.body;
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+
+    const booking = await bookingsCollection().findOne({ _id: new ObjectId(req.params.id) });
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    if (booking.seller.toString() !== req.user!._id.toString()) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    await bookingsCollection().updateOne(
+      { _id: booking._id },
+      { $set: { status, updatedAt: new Date() } }
+    );
+
+    res.json({ message: `Booking ${status}` });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ================= ADMIN ROUTES ================= */
 
 app.get("/api/admin/stats", protect, adminOnly, async (req: Request, res: Response, next: NextFunction) => {
@@ -367,6 +541,27 @@ app.delete("/api/admin/users/:id", protect, adminOnly, async (req: Request, res:
     await carsCollection().deleteMany({ seller: user._id });
     await usersCollection().deleteOne({ _id: user._id });
     res.json({ message: "User removed" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put("/api/admin/users/:id/role", protect, adminOnly, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { role } = req.body;
+    if (!["user", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+    if (!ObjectId.isValid(req.params.id)) return res.status(404).json({ message: "User not found" });
+
+    const result = await usersCollection().updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { role, updatedAt: new Date() } }
+    );
+
+    if (result.matchedCount === 0) return res.status(404).json({ message: "User not found" });
+
+    res.json({ message: `User role updated to ${role}` });
   } catch (err) {
     next(err);
   }

@@ -13,6 +13,7 @@ export interface IUser {
   role: UserRole;
   googleId?: string;
   avatar?: string;
+  favorites?:ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,4 +80,44 @@ export function usersCollection() {
 
 export function carsCollection() {
   return getDB().collection<ICar>("cars");
+}
+
+/* ---------------- Booking Model ---------------- */
+
+export type BookingStatus = "pending" | "approved" | "rejected";
+
+export interface IBooking {
+  _id?: ObjectId;
+  car: ObjectId;
+  buyer: ObjectId;
+  seller: ObjectId;
+  amount: number;
+  moveInDate: string;
+  contactNumber: string;
+  notes?: string;
+  status: BookingStatus;
+  paymentStatus: "pending" | "paid";
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export function bookingsCollection() {
+  return getDB().collection<IBooking>("bookings");
+}
+
+/* ---------------- Review Model ---------------- */
+
+export interface IReview {
+  _id?: ObjectId;
+  car: ObjectId;
+  user: ObjectId;
+  userName: string;
+  userEmail: string;
+  rating: number;
+  comment: string;
+  createdAt: Date;
+}
+
+export function reviewsCollection() {
+  return getDB().collection<IReview>("reviews");
 }
